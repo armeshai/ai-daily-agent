@@ -1,0 +1,5 @@
+[build]
+  functions = "netlify/functions"
+
+[functions."daily-trigger"]
+  schedule = "30 4 * * *"
