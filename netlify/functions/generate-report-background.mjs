@@ -1,69 +1,107 @@
-import { GoogleGenAI } from "@google/genai";
 import nodemailer from "nodemailer";
 
-export default async (req) => {
-  const authHeader = req.headers.get("authorization");
-  if (authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
-    return new Response("Unauthorized", { status: 401 });
-  }
+export default async function handler(req) {
+  try {
+    const cronSecret = process.env.CRON_SECRET;
+    if (cronSecret) {
+      const authHeader = req.headers.get("authorization");
+      const providedSecret =
+        req.headers.get("x-cron-secret") ||
+        (authHeader?.startsWith("Bearer ") ? authHeader.slice(7) : null);
 
-  const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+      if (providedSecret !== cronSecret) {
+        return new Response(JSON.stringify({ error: "Unauthorized" }), {
+          status: 401,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+    }
 
-  const today = new Date().toLocaleDateString("fa-IR", {
-    timeZone: "Asia/Tehran",
-    year: "numeric",
-    month: "long",
-    day: "numeric",
-  });
+    const groqApiKey = process.env.GROQ_API_KEY;
+    const gmailUser = process.env.GMAIL_USER;
+    const gmailAppPassword = process.env.GMAIL_APP_PASSWORD;
 
-  const prompt = `
-امروز ${today} است. تو دستیار تخصصی پژوهش و آموزش هوش مصنوعی برای «دکتر محمد آرمش» (مدرس هوش مصنوعی و فناوری‌های نوین) هستی.
-با استفاده از جستجوی زنده گوگل، جدیدترین ابزارها و اخبار هوش مصنوعی رونمایی‌شده در ۲۴ تا ۴۸ ساعت گذشته را پیدا کن و یک جزوه آموزشی جامع، ساختاریافته و کاربردی به زبان فارسی بنویس که شامل بخش‌های زیر باشد:
+    if (!groqApiKey || !gmailUser || !gmailAppPassword) {
+      throw new Error(
+        "Missing required environment variables (GROQ_API_KEY, GMAIL_USER, GMAIL_APP_PASSWORD)."
+      );
+    }
 
-1. **جدیدترین اخبار و ابزارهای هوش مصنوعی رونمایی‌شده:**
-   - معرفی ۳ تا ۴ ابزار یا مدل جدید و مهم روز، لینک یا نام دقیق، کاربرد اصلی و نحوه کار کردن با هر کدام به زبان ساده و آموزشی برای تدریس در کارگاه‌ها.
+    const systemPrompt =
+      "شما دستیار پژوهش و آموزش هوش مصنوعی برای دکتر محمد آرمش هستید. گزارش روزانه را به زبان فارسی روان، دقیق، ساختاریافته و کاربردی بنویسید.";
 
-2. **بخش تخصصی عکاسی عروس و داماد و آتلیه:**
-   - معرفی ترفند یا ابزار روز برای روتوش، نورپردازی، ساخت دکور یا ویدئوهای سینمایی عروسی.
-   - ارائه ۳ پرامپت حرفه‌ای و آماده (به زبان انگلیسی همراه با توضیح فارسی کاربرد هرکدام) برای عکاسی آتلیه، ژست عروس و داماد و فضاسازی لوکس.
-
-3. **بخش تخصصی دانشجویان و پژوهشگران:**
-   - معرفی روش یا ابزار کاربردی برای مقاله‌نویسی، تحلیل داده، پایان‌نامه و یادگیری عمیق.
-   - ارائه ۲ پرامپت تخصصی و ساختاریافته برای پژوهش، خلاصه‌سازی مقالات و تحلیل علمی.
-
-4. **بخش تخصصی معادن و صنایع معدنی:**
-   - کاربرد جدید هوش مصنوعی در اکتشاف، تحلیل داده‌های زمین‌شناسی، پایش ایمنی یا بهینه‌سازی فرآیندهای معدنی.
-   - ارائه ۲ پرامپت تخصصی برای تحلیل گزارش‌های اکتشافی، داده‌های ژئوشیمی و بهره‌وری معدن.
-
-خروجی را با HTML تمیز، راست‌به‌چپ (dir="rtl")، فونت خوانا و تیتربندی حرفه‌ای آماده کن تا مستقیم در ایمیل نمایش داده شود. از نوشتن کدهای اضافه مثل \`\`\`html در ابتدا و انتها خودداری کن.
+    const userPrompt = `
+یک بسته آموزشی و گزارش روزانه حرفه‌ای با عنوان «بسته روزانه هوش مصنوعی» تهیه کن که شامل بخش‌های زیر باشد:
+1. مهم‌ترین اخبار و تحولات دنیای هوش مصنوعی
+2. ابزارهای کاربردی جدید و روش استفاده عملی آن‌ها در تدریس و تولید محتوا
+3. پرامپت‌های تخصصی و آماده استفاده در سه حوزه:
+   - عکاسی و آتلیه
+   - معدن و صنایع معدنی
+   - پژوهش و نگارش علمی دانشجویان
+خروجی را با تیترهای منظم و خوانا ارائه بده.
 `;
 
-  const response = await ai.models.generateContent({
-    model: "gemini-2.5-flash",
-    contents: prompt,
-    config: {
-      tools: [{ googleSearch: {} }],
-    },
-  });
+    const groqResponse = await fetch(
+      "https://api.groq.com/openai/v1/chat/completions",
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${groqApiKey}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          model: "llama-3.3-70b-versatile",
+          temperature: 0.7,
+          messages: [
+            { role: "system", content: systemPrompt },
+            { role: "user", content: userPrompt },
+          ],
+        }),
+      }
+    );
 
-  const htmlReport = response.text;
+    if (!groqResponse.ok) {
+      const errorText = await groqResponse.text();
+      throw new Error(`Groq API error (${groqResponse.status}): ${errorText}`);
+    }
 
-  const transporter = nodemailer.createTransport({
-    service: "gmail",
-    auth: {
-      user: process.env.GMAIL_USER,
-      pass: process.env.GMAIL_APP_PASSWORD,
-    },
-  });
+    const groqData = await groqResponse.json();
+    const reportText =
+      groqData?.choices?.[0]?.message?.content?.trim() ||
+      "گزارش امروز تولید نشد.";
 
-  const isoDate = new Date().toISOString().split("T")[0];
+    const transporter = nodemailer.createTransport({
+      service: "gmail",
+      auth: {
+        user: gmailUser,
+        pass: gmailAppPassword,
+      },
+    });
 
-  await transporter.sendMail({
-    from: `"دستیار هوشمند مورب" <${process.env.GMAIL_USER}>`,
-    to: "mohammadarmeshai@gmail.com",
-    subject: `گزارش روزانه هوش مصنوعی و جزوه آموزشی - ${isoDate}`,
-    html: `<div dir="rtl" style="font-family: Tahoma, Arial, sans-serif; line-height: 1.8; color: #1f2937; max-width: 800px; margin: auto;">${htmlReport}</div>`,
-  });
+    const todayStr = new Date().toISOString().slice(0, 10);
 
-  return new Response("Report sent successfully", { status: 200 });
-};
+    await transporter.sendMail({
+      from: `"بسته روزانه هوش مصنوعی" <${gmailUser}>`,
+      to: "mohammadarmeshai@gmail.com",
+      subject: `بسته روزانه هوش مصنوعی - ${todayStr}`,
+      text: reportText,
+    });
+
+    return new Response(
+      JSON.stringify({ ok: true, message: "Report generated and sent." }),
+      {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }
+    );
+  } catch (err) {
+    console.error("Error in generate-report-background:", err);
+    return new Response(
+      JSON.stringify({ ok: false, error: err?.message || "Unknown error" }),
+      {
+        status: 500,
+        headers: { "Content-Type": "application/json" },
+      }
+    );
+  }
+}
